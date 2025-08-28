@@ -1,103 +1,229 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+type WeatherData = {
+  name: string;
+  dt: number;
+  timezone: number; 
+  sys: { country?: string; sunrise: number; sunset: number };
+  weather: { main: string; description: string; icon: string }[];
+  main: { temp: number; humidity: number; pressure: number; temp_min: number; temp_max: number };
+  wind?: { speed?: number; deg?: number };
+  clouds?: { all?: number };
+};
+
+type LoadState = 'idle' | 'locating' | 'loading' | 'done' | 'error';
+
+export default function Page() {
+  const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [data, setData] = useState<WeatherData | null>(null);
+  const [state, setState] = useState<LoadState>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  
+  const isBusy = state === 'locating' || state === 'loading';
+
+  const formatTime = useCallback((unix: number, tzOffsetSeconds: number) => {
+   
+    const d = new Date((unix + tzOffsetSeconds) * 1000);
+    return d.toUTCString().slice(17, 22) + ' UTC'; 
+  }, []);
+
+  const iconUrl = useMemo(() => {
+    const icon = data?.weather?.[0]?.icon;
+    return icon ? `https://openweathermap.org/img/wn/${icon}@2x.png` : null;
+  }, [data]);
+
+ 
+  const getLocation = useCallback(() => {
+    setError(null);
+    setState('locating');
+    setData(null);
+    setCoords(null);
+
+    if (!('geolocation' in navigator)) {
+      setState('error');
+      setError('Geolocation is not supported in this browser.');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos: GeolocationPosition) => {
+        const { latitude, longitude } = pos.coords;
+        setCoords({ lat: latitude, lon: longitude });
+      },
+      (err: GeolocationPositionError) => {
+        setState('error');
+        switch (err.code) {
+          case err.PERMISSION_DENIED:
+            setError('Permission denied. Please allow location access and try again.');
+            break;
+          case err.POSITION_UNAVAILABLE:
+            setError('Location unavailable. Check your device settings and try again.');
+            break;
+          case err.TIMEOUT:
+            setError('Location request timed out. Please try again.');
+            break;
+          default:
+            setError('Failed to get your location.');
+        }
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  }, []);
+
+ 
+  const fetchWeather = useCallback(async (lat: number, lon: number) => {
+    setState('loading');
+    setError(null);
+    setData(null);
+
+    try {
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
+      const url = `/api/weather?lat=${lat}&lon=${lon}`;
+      const res = await fetch(url, { signal: ctrl.signal });
+
+      if (!res.ok) {
+      
+        const body: unknown = await res.json().catch(() => null);
+        let msg = `Network error (${res.status})`;
+        if (body && typeof body === 'object' && 'error' in body) {
+          const maybeErr = (body as { error?: unknown }).error;
+          if (typeof maybeErr === 'string') msg = maybeErr;
+        }
+        throw new Error(msg);
+      }
+
+      const json: WeatherData = await res.json();
+      setData(json);
+      setState('done');
+    } catch (e: unknown) {
+      
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      setState('error');
+      setError(e instanceof Error ? e.message : 'Failed to load weather.');
+    }
+  }, []);
+
+ 
+  useEffect(() => {
+    getLocation();
+  }, [getLocation]);
+
+
+  useEffect(() => {
+    if (coords) fetchWeather(coords.lat, coords.lon);
+  }, [coords, fetchWeather]);
+
+  const onRefresh = useCallback(() => {
+    getLocation();
+  }, [getLocation]);
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <main>
+      <header className="row" style={{ justifyContent: 'space-between', marginBottom: 16 }}>
+        <h1 style={{ margin: 0 }}>Weather at your location</h1>
+        <button className="btn btn-outline" onClick={onRefresh} disabled={isBusy}>
+          ⟳ Refresh
+        </button>
+      </header>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+   
+      {state === 'locating' && (
+        <div className="card center">
+          <div>
+            <div className="spinner" />
+            <div className="dim">Locating you…</div>
+            <div className="small dim" style={{ marginTop: 6 }}>
+              Tip: If prompted, allow location access.
+            </div>
+          </div>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+      )}
+
+      {state === 'loading' && (
+        <div className="card center">
+          <div>
+            <div className="spinner" />
+            <div className="dim">Fetching weather…</div>
+          </div>
+        </div>
+      )}
+
+      {state === 'error' && (
+        <div className="card">
+          <h2 style={{ marginTop: 0 }}>Something went wrong</h2>
+          <p className="error">{error}</p>
+          <div className="row">
+            <button className="btn" onClick={onRefresh} disabled={isBusy}>
+              Try again
+            </button>
+          </div>
+          <p className="small dim" style={{ marginTop: 8 }}>
+            Common fixes: enable location, check connection, try HTTPS, refresh page.
+          </p>
+        </div>
+      )}
+
+      {state === 'done' && data && (
+        <section className="card">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div>
+              <div className="badge">Now</div>
+              <h2 style={{ margin: '10px 0 0 0' }}>
+                {data.name}{data.sys?.country ? `, ${data.sys.country}` : ''}
+              </h2>
+              <div className="dim small" aria-live="polite">
+                Updated: {new Date(data.dt * 1000).toLocaleString()}
+              </div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              {iconUrl && (
+                <img
+                  alt={data.weather?.[0]?.description || 'weather'}
+                  src={iconUrl}
+                  width={80}
+                  height={80}
+                />
+              )}
+              <div className="dim small" style={{ textTransform: 'capitalize' }}>
+                {data.weather?.[0]?.description ?? data.weather?.[0]?.main}
+              </div>
+            </div>
+          </div>
+
+          <div className="row" style={{ marginTop: 18, alignItems: 'baseline' }}>
+            <div className="big">{Math.round(data.main.temp)}°</div>
+            <div className="dim">
+              feels like ~ {Math.round((data.main.temp_min + data.main.temp_max) / 2)}°
+            </div>
+          </div>
+
+          <div className="grid" style={{ marginTop: 16 }}>
+            <div className="kv">
+              <span>Min / Max</span>
+              <span>{Math.round(data.main.temp_min)}° / {Math.round(data.main.temp_max)}°</span>
+            </div>
+            <div className="kv"><span>Humidity</span><span>{data.main.humidity}%</span></div>
+            <div className="kv"><span>Pressure</span><span>{data.main.pressure} hPa</span></div>
+            <div className="kv"><span>Wind</span><span>{data.wind?.speed ?? 0} m/s</span></div>
+            <div className="kv"><span>Clouds</span><span>{data.clouds?.all ?? 0}%</span></div>
+            <div className="kv"><span>Sunrise</span><span>{formatTime(data.sys.sunrise, data.timezone)}</span></div>
+            <div className="kv"><span>Sunset</span><span>{formatTime(data.sys.sunset, data.timezone)}</span></div>
+          </div>
+
+          <div className="row" style={{ marginTop: 18 }}>
+            <button className="btn" onClick={onRefresh} disabled={isBusy}>
+              ⟳ Refresh
+            </button>
+          </div>
+        </section>
+      )}
+    </main>
   );
 }
